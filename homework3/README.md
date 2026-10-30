@@ -4,7 +4,7 @@
 
 ## Запуск
 
-Из папки `соадз3`:
+Из папки `homework3`:
 
 ```bash
 docker compose up --build
