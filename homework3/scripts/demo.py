@@ -33,8 +33,22 @@ def main():
     assert any(item["id"] == FLIGHT_ID for item in search), "тестовый рейс не найден"
     flight = api("GET", f"/flights/{FLIGHT_ID}")
     before = flight["available_seats"]
+    assert api("GET", f"/flights/{FLIGHT_ID}")["available_seats"] == before
     assert before >= 2, "на тестовом рейсе меньше двух свободных мест"
     print(f"Рейс {flight['flight_number']}: свободно {before}, цена {flight['price']}")
+
+    try:
+        api("POST", "/bookings", {
+            "user_id": user_id, "flight_id": FLIGHT_ID,
+            "passenger_name": "Иван Иванов", "passenger_email": "ivan@example.com",
+            "seat_count": before + 1,
+        })
+    except RuntimeError as exc:
+        assert "HTTP 409" in str(exc), str(exc)
+    else:
+        raise AssertionError("бронь без свободных мест не должна создаваться")
+    assert api("GET", f"/flights/{FLIGHT_ID}")["available_seats"] == before
+    print("При нехватке мест: HTTP 409, число мест не изменилось")
 
     booking = api("POST", "/bookings", {
         "user_id": user_id,
