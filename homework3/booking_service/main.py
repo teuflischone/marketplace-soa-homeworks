@@ -106,9 +106,19 @@ def get_flight(flight_id: uuid.UUID):
 def create_booking(payload: BookingInput):
     flight = grpc_call("GetFlight", pb.GetFlightRequest(id=str(payload.flight_id)))
     booking_id = uuid.uuid4()
-    grpc_call("ReserveSeats", pb.ReserveSeatsRequest(
-        flight_id=str(payload.flight_id), seat_count=payload.seat_count, booking_id=str(booking_id)
-    ))
+    try:
+        grpc_call("ReserveSeats", pb.ReserveSeatsRequest(
+            flight_id=str(payload.flight_id), seat_count=payload.seat_count, booking_id=str(booking_id)
+        ))
+    except HTTPException as exc:
+        # После таймаута ответ мог потеряться, хотя места уже заняты.
+        if exc.status_code == 503:
+            try:
+                grpc_call("ReleaseReservation", pb.ReleaseReservationRequest(booking_id=str(booking_id)))
+            except HTTPException as release_error:
+                if release_error.status_code != 404:
+                    log.warning("could not release reservation %s after failed response: %s", booking_id, release_error)
+        raise
     total = Decimal(flight.price) * payload.seat_count
     try:
         with connect() as conn:
