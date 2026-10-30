@@ -1,0 +1,6 @@
+__pycache__/
+.pytest_cache/
+.venv/
+*.pyc
+flight_pb2.py
+flight_pb2_grpc.py

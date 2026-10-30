@@ -1,0 +1,98 @@
+services:
+  flight-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: flights
+      POSTGRES_PASSWORD: flights
+      POSTGRES_DB: flights
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flights -d flights"]
+      interval: 2s
+      retries: 20
+    volumes:
+      - flight_data:/var/lib/postgresql/data
+
+  booking-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bookings
+      POSTGRES_PASSWORD: bookings
+      POSTGRES_DB: bookings
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bookings -d bookings"]
+      interval: 2s
+      retries: 20
+    volumes:
+      - booking_data:/var/lib/postgresql/data
+
+  redis-primary:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 20
+    volumes:
+      - redis_primary_data:/data
+
+  redis-replica:
+    image: redis:7-alpine
+    command: ["redis-server", "--replicaof", "redis-primary", "6379", "--appendonly", "yes"]
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+    volumes:
+      - redis_replica_data:/data
+
+  redis-sentinel:
+    image: redis:7-alpine
+    command: ["sh", "-c", "cp /config/sentinel.conf /tmp/sentinel.conf && redis-sentinel /tmp/sentinel.conf"]
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+      redis-replica:
+        condition: service_started
+    volumes:
+      - ./redis/sentinel.conf:/config/sentinel.conf:ro
+
+  flight-service:
+    build: .
+    command: ["python", "-m", "flight_service.main"]
+    environment:
+      DATABASE_URL: postgresql://flights:flights@flight-db:5432/flights
+      GRPC_API_KEY: ${GRPC_API_KEY:-local-homework-key}
+      REDIS_SENTINEL_HOST: redis-sentinel
+      REDIS_SENTINEL_PORT: 26379
+      REDIS_MASTER_NAME: mymaster
+      CACHE_TTL_SECONDS: 420
+    depends_on:
+      flight-db:
+        condition: service_healthy
+      redis-sentinel:
+        condition: service_started
+    ports:
+      - "50051:50051"
+
+  booking-service:
+    build: .
+    command: ["uvicorn", "booking_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      DATABASE_URL: postgresql://bookings:bookings@booking-db:5432/bookings
+      FLIGHT_GRPC_TARGET: flight-service:50051
+      GRPC_API_KEY: ${GRPC_API_KEY:-local-homework-key}
+      CB_FAILURE_THRESHOLD: 5
+      CB_OPEN_SECONDS: 15
+      CB_WINDOW_SECONDS: 60
+    depends_on:
+      booking-db:
+        condition: service_healthy
+      flight-service:
+        condition: service_started
+    ports:
+      - "8000:8000"
+
+volumes:
+  flight_data:
+  booking_data:
+  redis_primary_data:
+  redis_replica_data:
