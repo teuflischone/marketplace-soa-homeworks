@@ -18,6 +18,8 @@ from db import connect, migrate
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("flight-service")
+# Чтение из БД и изменение рейса не должны одновременно записывать кеш.
+CACHE_LOCK = 42_310
 
 FLIGHT_STATUS = {
     "SCHEDULED": pb.FLIGHT_STATUS_SCHEDULED,
@@ -117,8 +119,10 @@ class Cache:
             keys = list(self.client.scan_iter(match="search:*"))
             self.client.delete(f"flight:{flight_id}", *keys)
             log.info("cache invalidated flight=%s search_keys=%s", flight_id, len(keys))
+            return True
         except redis.RedisError as exc:
             log.warning("cache invalidation unavailable: %s", exc)
+            return False
 
 
 class FlightService(rpc.FlightServiceServicer):
@@ -151,10 +155,14 @@ class FlightService(rpc.FlightServiceServicer):
             args.extend([start, start + timedelta(days=1)])
         sql += " ORDER BY departure_at"
         with connect() as conn:
+            conn.execute("SELECT pg_advisory_xact_lock_shared(%s)", (CACHE_LOCK,))
+            cached = self.cache.get(key, pb.SearchFlightsResponse)
+            if cached is not None:
+                return cached
             rows = conn.execute(sql, args).fetchall()
-        result = pb.SearchFlightsResponse(flights=[flight_message(row) for row in rows])
-        self.cache.put(key, result)
-        return result
+            result = pb.SearchFlightsResponse(flights=[flight_message(row) for row in rows])
+            self.cache.put(key, result)
+            return result
 
     def GetFlight(self, request, context):
         flight_id = parse_uuid(request.id, "id", context)
@@ -163,12 +171,16 @@ class FlightService(rpc.FlightServiceServicer):
         if cached is not None:
             return cached
         with connect() as conn:
+            conn.execute("SELECT pg_advisory_xact_lock_shared(%s)", (CACHE_LOCK,))
+            cached = self.cache.get(key, pb.Flight)
+            if cached is not None:
+                return cached
             row = conn.execute("SELECT * FROM flights WHERE id = %s", (flight_id,)).fetchone()
-        if row is None:
-            context.abort(grpc.StatusCode.NOT_FOUND, "flight not found")
-        result = flight_message(row)
-        self.cache.put(key, result)
-        return result
+            if row is None:
+                context.abort(grpc.StatusCode.NOT_FOUND, "flight not found")
+            result = flight_message(row)
+            self.cache.put(key, result)
+            return result
 
     def ReserveSeats(self, request, context):
         flight_id = parse_uuid(request.flight_id, "flight_id", context)
@@ -177,6 +189,7 @@ class FlightService(rpc.FlightServiceServicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "seat_count must be positive")
         with connect() as conn:
             with conn.transaction():
+                conn.execute("SELECT pg_advisory_xact_lock(%s)", (CACHE_LOCK,))
                 flight = conn.execute("SELECT * FROM flights WHERE id = %s FOR UPDATE", (flight_id,)).fetchone()
                 if flight is None:
                     context.abort(grpc.StatusCode.NOT_FOUND, "flight not found")
@@ -199,24 +212,25 @@ class FlightService(rpc.FlightServiceServicer):
                 if row is None:
                     context.abort(grpc.StatusCode.ALREADY_EXISTS, "booking_id belongs to another reservation")
                 conn.execute("UPDATE flights SET available_seats = available_seats - %s WHERE id = %s", (request.seat_count, flight_id))
-        self.cache.invalidate_flight(flight_id)
+                if not self.cache.invalidate_flight(flight_id):
+                    context.abort(grpc.StatusCode.UNAVAILABLE, "cache unavailable")
         return reservation_message(row)
 
     def ReleaseReservation(self, request, context):
         booking_id = parse_uuid(request.booking_id, "booking_id", context)
-        changed = False
         with connect() as conn:
             with conn.transaction():
-                row = conn.execute("SELECT * FROM seat_reservations WHERE booking_id = %s FOR UPDATE", (booking_id,)).fetchone()
-                if row is None:
+                conn.execute("SELECT pg_advisory_xact_lock(%s)", (CACHE_LOCK,))
+                existing = conn.execute("SELECT flight_id FROM seat_reservations WHERE booking_id = %s", (booking_id,)).fetchone()
+                if existing is None:
                     context.abort(grpc.StatusCode.NOT_FOUND, "reservation not found")
+                conn.execute("SELECT 1 FROM flights WHERE id = %s FOR UPDATE", (existing["flight_id"],))
+                row = conn.execute("SELECT * FROM seat_reservations WHERE booking_id = %s FOR UPDATE", (booking_id,)).fetchone()
                 if row["status"] == "ACTIVE":
-                    conn.execute("SELECT 1 FROM flights WHERE id = %s FOR UPDATE", (row["flight_id"],))
                     conn.execute("UPDATE flights SET available_seats = available_seats + %s WHERE id = %s", (row["seat_count"], row["flight_id"]))
                     row = conn.execute("UPDATE seat_reservations SET status = 'RELEASED' WHERE id = %s RETURNING *", (row["id"],)).fetchone()
-                    changed = True
-        if changed:
-            self.cache.invalidate_flight(row["flight_id"])
+                    if not self.cache.invalidate_flight(row["flight_id"]):
+                        context.abort(grpc.StatusCode.UNAVAILABLE, "cache unavailable")
         return reservation_message(row)
 
     def UpdateFlight(self, request, context):
@@ -238,13 +252,15 @@ class FlightService(rpc.FlightServiceServicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "price or status is required")
         with connect() as conn:
             with conn.transaction():
+                conn.execute("SELECT pg_advisory_xact_lock(%s)", (CACHE_LOCK,))
                 row = conn.execute(
                     "UPDATE flights SET price = COALESCE(%s, price), status = COALESCE(%s, status) WHERE id = %s RETURNING *",
                     (price, status, flight_id),
                 ).fetchone()
                 if row is None:
                     context.abort(grpc.StatusCode.NOT_FOUND, "flight not found")
-        self.cache.invalidate_flight(flight_id)
+                if not self.cache.invalidate_flight(flight_id):
+                    context.abort(grpc.StatusCode.UNAVAILABLE, "cache unavailable")
         return flight_message(row)
 
 
