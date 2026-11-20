@@ -1,0 +1,179 @@
+{
+  "uid": "cinema-analytics",
+  "title": "Online Cinema",
+  "schemaVersion": 41,
+  "timezone": "utc",
+  "editable": false,
+  "refresh": "30s",
+  "time": {
+    "from": "now-14d",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Retention Cohort Heatmap",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 10
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "cinema-clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "cinema-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "SELECT toString(day) AS Cohort,\n       maxIf(value, dimension = '0') AS `Day 0`,\n       maxIf(value, dimension = '1') AS `Day 1`,\n       maxIf(value, dimension = '2') AS `Day 2`,\n       maxIf(value, dimension = '3') AS `Day 3`,\n       maxIf(value, dimension = '4') AS `Day 4`,\n       maxIf(value, dimension = '5') AS `Day 5`,\n       maxIf(value, dimension = '6') AS `Day 6`,\n       maxIf(value, dimension = '7') AS `Day 7`\nFROM daily_metrics WHERE metric = 'retention' AND day BETWEEN toDate($__fromTime) AND toDate($__toTime) GROUP BY day HAVING isNotNull(`Day 0`) ORDER BY day"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/^Day [0-7]$/"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#eef5fa",
+                      "value": null
+                    },
+                    {
+                      "color": "#a6cee3",
+                      "value": 0.01
+                    },
+                    {
+                      "color": "#5ca5cf",
+                      "value": 0.25
+                    },
+                    {
+                      "color": "#2381b8",
+                      "value": 0.5
+                    },
+                    {
+                      "color": "#15568a",
+                      "value": 0.75
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 2,
+      "title": "DAU",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 10,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "cinema-clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "cinema-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "timeseries",
+          "format": 0,
+          "rawSql": "SELECT toDateTime(day, 'UTC') AS time, value FROM daily_metrics WHERE metric = 'dau' AND day BETWEEN toDate($__fromTime) AND toDate($__toTime) ORDER BY time"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 3,
+      "title": "Конверсия просмотра",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 10,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "cinema-clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "cinema-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "timeseries",
+          "format": 0,
+          "rawSql": "SELECT toDateTime(day, 'UTC') AS time, value FROM daily_metrics WHERE metric = 'view_conversion' AND day BETWEEN toDate($__fromTime) AND toDate($__toTime) ORDER BY time"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {}
+    }
+  ]
+}
