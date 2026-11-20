@@ -66,6 +66,15 @@ services:
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-3:9092
     volumes: [kafka3:/var/lib/kafka/data]
 
+  topics:
+    <<: *app
+    command: python -m app.topics
+    environment: *connection
+    depends_on:
+      kafka-1: {condition: service_healthy}
+      kafka-2: {condition: service_healthy}
+      kafka-3: {condition: service_healthy}
+
   schema-registry:
     image: ghcr.io/aiven-open/karapace:5.0.0
     entrypoint: [python3, -m, karapace]
@@ -77,13 +86,12 @@ services:
       KARAPACE_BOOTSTRAP_URI: kafka-1:9092,kafka-2:9092,kafka-3:9092
       KARAPACE_REPLICATION_FACTOR: 3
       KARAPACE_COMPATIBILITY: BACKWARD
+      KARAPACE_LOG_LEVEL: INFO
     depends_on:
-      kafka-1: {condition: service_healthy}
-      kafka-2: {condition: service_healthy}
-      kafka-3: {condition: service_healthy}
+      topics: {condition: service_completed_successfully}
     ports: ["127.0.0.1:${REGISTRY_PORT-8085}:8081"]
     healthcheck:
-      test: [CMD, python3, -c, "from urllib.request import urlopen; urlopen('http://localhost:8081/subjects', timeout=3).close()"]
+      test: [CMD, python3, healthcheck.py, http://127.0.0.1:8081/_health]
       interval: 5s
       timeout: 4s
       start_period: 20s

@@ -13,7 +13,7 @@ compose() {
 cleanup() {
     result=$?
     if [ "$result" -ne 0 ]; then
-        compose logs --tail=40 setup clickhouse producer aggregation grafana s3 >&2 || true
+        compose logs --tail=40 topics setup schema-registry clickhouse producer aggregation grafana s3 >&2 || true
     fi
     compose down -v --remove-orphans >/dev/null || true
     exit "$result"

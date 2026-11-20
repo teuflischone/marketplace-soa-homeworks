@@ -13,7 +13,7 @@ docker compose up --build -d
 docker compose ps -a
 ```
 
-При первом запуске `credentials` создаёт локальные ключи в Docker volumes. `setup` создаёт топик, регистрирует Avro-схему и применяет SQL-миграции. После успешной настройки он выходит с кодом 0.
+При первом запуске `credentials` создаёт локальные ключи в Docker volumes. `topics` создаёт топики Kafka до старта Schema Registry. `setup` регистрирует Avro-схему и применяет SQL-миграции. Оба контейнера после настройки выходят с кодом 0.
 
 - [Producer API](http://localhost:8005/docs)
 - [Aggregation API](http://localhost:8006/docs)
